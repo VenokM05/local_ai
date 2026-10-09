@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+# Local SQLite index and any imported docs stay on-device (PRD FR-07).
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+# Keep the bundled sample reference tracked, ignore other dropped files.
+data/*
+!data/sample/

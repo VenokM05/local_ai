@@ -1,0 +1,4 @@
+# Local RAG backend dependencies (all usable fully offline once installed).
+Flask>=2.2,<3.0
+PyMuPDF>=1.23
+requests>=2.31
