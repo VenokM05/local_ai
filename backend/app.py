@@ -8,12 +8,19 @@ Endpoints (all JSON, curl-friendly, no UI yet):
   POST   /api/ask                 -> retrieve -> local model -> grounded answer
                                      + citation badges + 'not enough info' fallback
                                      (FR-04/FR-05/FR-08)
+  GET    /api/checklist           -> preparedness items (FR-06)
+  POST   /api/checklist           -> add a custom item (FR-06)
+  PATCH  /api/checklist/<id>      -> mark done/undo (FR-06)
+  DELETE /api/checklist/<id>      -> remove an item (FR-06)
+  GET    /api/chat                -> recent local Q&A history (FR-07)
+  DELETE /api/chat                -> clear chat history (FR-07)
 
 The server binds to loopback only (PRD section 7 implementation note).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 
@@ -138,12 +145,15 @@ def ask():
     passages = retrieval.retrieve(question, corpus)
 
     # Fallback path: no sufficiently relevant passage -> do NOT invent an answer
-    # and do NOT call the model (PRD FR-04 / section 15).
+    # and do NOT call the model (PRD FR-04 / section 15). Still logged locally
+    # so the exchange is part of the on-device history (PRD FR-07).
     if not passages:
+        fallback = ("The available documents do not contain enough information "
+                    "to answer this.")
+        db.add_chat_message(question, fallback, False, "[]")
         return jsonify({
             "question": question,
-            "answer": "The available documents do not contain enough information "
-                      "to answer this.",
+            "answer": fallback,
             "supported": False,
             "citations": [],
             "disclaimer": DISCLAIMER,
@@ -168,14 +178,74 @@ def ask():
     insufficient = llm.INSUFFICIENT_MARKER in raw.upper()
     answer = ("The available documents do not contain enough information to "
               "answer this.") if insufficient else raw
+    citations = [] if insufficient else _snippets(passages)
+
+    # Persist the exchange locally (PRD FR-07). Answer + citations stay on-device.
+    db.add_chat_message(question, answer, not insufficient,
+                        json.dumps(citations))
 
     return jsonify({
         "question": question,
         "answer": answer,
         "supported": not insufficient,
-        "citations": [] if insufficient else _snippets(passages),
+        "citations": citations,
         "disclaimer": DISCLAIMER,
     })
+
+
+# --- Checklist (PRD FR-06) -------------------------------------------------
+@app.route("/api/checklist", methods=["GET"])
+def get_checklist():
+    db.init_db()
+    return jsonify({"items": db.list_checklist(),
+                    "note": "General preparedness starting point; adapt to "
+                            "your household and follow official guidance."})
+
+
+@app.route("/api/checklist", methods=["POST"])
+def post_checklist():
+    db.init_db()
+    data = request.get_json(silent=True) or {}
+    label = (data.get("label") or "").strip()
+    category = (data.get("category") or "General").strip()
+    if not label:
+        return jsonify({"error": "Field 'label' is required."}), 400
+    item_id = db.add_checklist_item(category, label)
+    return jsonify({"id": item_id, "category": category, "label": label,
+                    "done": False}), 201
+
+
+@app.route("/api/checklist/<int:item_id>", methods=["PATCH"])
+def patch_checklist(item_id: int):
+    db.init_db()
+    data = request.get_json(silent=True) or {}
+    if "done" not in data:
+        return jsonify({"error": "Field 'done' (true/false) is required."}), 400
+    updated = db.set_checklist_done(item_id, bool(data["done"]))
+    if not updated:
+        return jsonify({"error": "No such checklist item."}), 404
+    return jsonify({"id": item_id, "done": bool(data["done"])})
+
+
+@app.route("/api/checklist/<int:item_id>", methods=["DELETE"])
+def remove_checklist(item_id: int):
+    db.init_db()
+    removed = db.delete_checklist_item(item_id)
+    return jsonify({"removed": removed, "id": item_id})
+
+
+# --- Chat history (PRD FR-07) ---------------------------------------------
+@app.route("/api/chat", methods=["GET"])
+def get_chat():
+    db.init_db()
+    return jsonify({"messages": db.list_chat()})
+
+
+@app.route("/api/chat", methods=["DELETE"])
+def delete_chat():
+    db.init_db()
+    cleared = db.clear_chat()
+    return jsonify({"cleared": cleared})
 
 
 def main():

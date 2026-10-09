@@ -34,7 +34,40 @@ CREATE TABLE IF NOT EXISTS text_chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_document ON text_chunks(document_id);
+
+CREATE TABLE IF NOT EXISTS checklist_items (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    category  TEXT NOT NULL,
+    label     TEXT NOT NULL,
+    done      INTEGER NOT NULL DEFAULT 0,
+    position  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    question   TEXT NOT NULL,
+    answer     TEXT NOT NULL,
+    supported  INTEGER NOT NULL,
+    citations  TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
+
+# Vetted, general preparedness content (PRD FR-06). Deliberately generic: no
+# single checklist fits every household or emergency, and the UI must say so.
+_SEED_CHECKLIST = [
+    ("Supplies", "3 liters of water per person per day for 3 days"),
+    ("Supplies", "Non-perishable food and a manual can opener"),
+    ("Supplies", "First-aid kit and any prescription medications"),
+    ("Supplies", "Flashlight with extra batteries"),
+    ("Supplies", "Battery or hand-crank radio"),
+    ("Documents", "Copies of IDs and important papers in a waterproof bag"),
+    ("Documents", "Cash in small bills"),
+    ("Communication", "Household meeting point and out-of-area contact"),
+    ("Communication", "Phones charged plus a power bank"),
+    ("Household", "Plan and routes to the nearest evacuation center"),
+    ("Household", "Check on elderly, disabled, or medical-needs members"),
+]
 
 
 def get_conn() -> sqlite3.Connection:
@@ -50,6 +83,14 @@ def get_conn() -> sqlite3.Connection:
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(_SCHEMA)
+        # Seed the preparedness checklist once (PRD FR-06).
+        count = conn.execute("SELECT COUNT(*) FROM checklist_items").fetchone()[0]
+        if count == 0:
+            conn.executemany(
+                "INSERT INTO checklist_items (category, label, position) "
+                "VALUES (?, ?, ?)",
+                [(cat, lbl, i) for i, (cat, lbl) in enumerate(_SEED_CHECKLIST)],
+            )
 
 
 def insert_document(name: str, media_type: str, source_path: Optional[str],
@@ -102,3 +143,71 @@ def delete_document(doc_id: int) -> bool:
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
         return cur.rowcount > 0
+
+
+# --- Checklist (PRD FR-06) -------------------------------------------------
+def list_checklist() -> List[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, category, label, done, position FROM checklist_items "
+            "ORDER BY position ASC, id ASC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def add_checklist_item(category: str, label: str) -> int:
+    with get_conn() as conn:
+        pos = conn.execute("SELECT COALESCE(MAX(position), -1) + 1 "
+                           "FROM checklist_items").fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO checklist_items (category, label, position) "
+            "VALUES (?, ?, ?)", (category, label, pos),
+        )
+        return int(cur.lastrowid)
+
+
+def set_checklist_done(item_id: int, done: bool) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE checklist_items SET done = ? WHERE id = ?",
+            (1 if done else 0, item_id),
+        )
+        return cur.rowcount > 0
+
+
+def delete_checklist_item(item_id: int) -> bool:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM checklist_items WHERE id = ?", (item_id,))
+        return cur.rowcount > 0
+
+
+# --- Chat history (PRD FR-07) ---------------------------------------------
+def add_chat_message(question: str, answer: str, supported: bool,
+                     citations_json: str) -> int:
+    with get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO chat_messages (question, answer, supported, citations) "
+            "VALUES (?, ?, ?, ?)",
+            (question, answer, 1 if supported else 0, citations_json),
+        )
+        return int(cur.lastrowid)
+
+
+def list_chat(limit: int = 50) -> List[dict]:
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, question, answer, supported, citations, created_at "
+            "FROM chat_messages ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["supported"] = bool(d["supported"])
+            out.append(d)
+        return out
+
+
+def clear_chat() -> int:
+    with get_conn() as conn:
+        cur = conn.execute("DELETE FROM chat_messages")
+        return cur.rowcount
