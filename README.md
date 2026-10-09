@@ -12,29 +12,49 @@ Local-first, offline-capable emergency-preparedness assistant for the AppBuilder
 ## What runs locally
 Document extraction, indexing, BM25 retrieval, model inference, checklist, and chat history all run on-device. Internet is needed **once** to install dependencies and download the model.
 
-## Quickstart (backend API only — no UI yet)
-The MVP is a loopback HTTP/JSON service you can `curl`.
+## Quickstart
 
-**Windows**
+### 1. Install prerequisites (once, needs internet)
+- **Python 3.10+** (Windows: from python.org, tick "Add to PATH").
+- **Ollama** + a small model that runs on your device.
+
+**Windows (PowerShell)**
 ```powershell
-# Prereqs: Python 3.10+, then Ollama + a small model
 winget install Ollama.Ollama
 ollama pull llama3.2:3b
 
+# Optional: start the runtime manually. On Windows the Ollama app runs
+# automatically in the background at http://127.0.0.1:11434.
+
 cd backend
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\setup.ps1
-.\run.ps1
+.\setup.ps1   # creates .venv and installs deps
+.\run.ps1     # starts the local server
 ```
 
 **macOS / Linux**
 ```bash
-brew install ollama && ollama serve   # in another terminal
+brew install ollama
+ollama serve &          # keep the runtime running
 ollama pull llama3.2:3b
 cd backend && ./setup.sh && ./run.sh
 ```
 
-**Test it**
+### 2. Open the app
+With the server running, open **http://127.0.0.1:5057/** in your browser.
+
+The UI has five screens (PRD §6):
+- **Home** — local-model status, kept distinct from a manual "offline test passed" mark
+- **Ask the Guide** — grounded answers with expandable source citations
+- **Documents** — import/remove PDF/TXT/MD, indexed on-device
+- **Checklist** — preparedness items with progress, saved locally
+- **Privacy & About** — what runs locally and how to delete data
+
+> Until you install Ollama and pull a model, the app still works but shows
+> "Local model unavailable" and answers fall back to "not enough information".
+
+### 3. (Optional) Use the JSON API directly
+The same capabilities are a loopback HTTP/JSON service you can `curl`:
 ```bash
 curl http://127.0.0.1:5057/api/health
 curl -X POST http://127.0.0.1:5057/api/documents \
@@ -43,6 +63,25 @@ curl -X POST http://127.0.0.1:5057/api/documents \
 curl -X POST http://127.0.0.1:5057/api/ask \
   -H 'Content-Type: application/json' \
   -d '{"question":"how much water should i store per person"}'
+```
+
+## Configuration
+All tunables live in [`backend/config.py`](./backend/config.py) and can be
+overridden with environment variables, e.g. `RESCUEDESK_MODEL`,
+`RESCUEDESK_PORT`, `RESCUEDESK_TOP_K`, `RESCUEDESK_SCORE_THRESHOLD`.
+The server binds to `127.0.0.1` only, so it is never exposed to your network.
+
+## Project layout
+```
+backend/
+  app.py        Flask routes (UI + /api)
+  config.py     settings & env overrides
+  db.py         SQLite schema (documents, chunks, checklist, chat)
+  ingest.py     PyMuPDF / text extraction + chunking
+  retrieval.py  pure-Python BM25
+  llm.py        Ollama client + grounding/fallback
+  static/       index.html, styles.css, app.js (the UI)
+  data/         local SQLite DB + bundled sample doc (git-ignored)
 ```
 
 ## Disclaimer
