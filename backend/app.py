@@ -24,7 +24,7 @@ import json
 import os
 import tempfile
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 
 import config
 import db
@@ -55,6 +55,12 @@ def _snippets(passages):
             "relevance": round(p["score"], 3),
         })
     return badges
+
+
+@app.route("/")
+def index():
+    """Serve the single-page front-end (PRD section 6)."""
+    return send_from_directory(app.static_folder, "index.html")
 
 
 @app.route("/api/health", methods=["GET"])
